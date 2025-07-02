@@ -29,22 +29,23 @@ def generate_elevation_powerpoint(bay_types_data):
         p.font.bold = True
         p.font.size = Pt(28)
 
-        # --- Dynamic Scaling and Positioning ---
-        max_bay_width_cm = sum(shelf['w'] for shelf in bay_type['shelf_details'].values())
-        max_bay_height_cm = sum(shelf['h'] for shelf in bay_type['shelf_details'].values())
+        # --- FIX: Corrected Dynamic Scaling and Positioning ---
+        # Calculate the true maximum width and height from the user's data
+        max_bay_width_cm = max(s['num_bins'] * s['w'] for s in bay_type['shelf_details'].values()) if bay_type['shelf_details'] else 1
+        max_bay_height_cm = sum(s['h'] for s in bay_type['shelf_details'].values()) if bay_type['shelf_details'] else 1
         
-        # Define drawing area on the slide
+        # Define the available drawing area on the slide
         drawing_area_width = Inches(8)
         drawing_area_height = Inches(6)
 
-        # Calculate scale to fit the drawing within the area
+        # Calculate scale to fit the drawing within the area, handling potential division by zero
         scale_w = drawing_area_width / max_bay_width_cm if max_bay_width_cm > 0 else 0
         scale_h = drawing_area_height / max_bay_height_cm if max_bay_height_cm > 0 else 0
-        scale = min(scale_w, scale_h) * 0.8 # Use 80% of the calculated scale for padding
+        scale = min(scale_w, scale_h) * 0.9 # Use 90% of the calculated scale for better padding
 
-        # Center the drawing
-        total_drawing_width = max(s['num_bins'] * s['w'] for s in bay_type['shelf_details'].values()) * scale
-        start_x = Inches(6.67) - (total_drawing_width / 2) # Center of 13.33" slide
+        # Center the drawing horizontally on the slide
+        total_drawing_width = max_bay_width_cm * scale
+        start_x = Inches(6.67) - (total_drawing_width / 2)
         start_y = Inches(6.8)
 
         current_y = start_y
@@ -99,7 +100,7 @@ def generate_elevation_powerpoint(bay_types_data):
             connector.line.color.rgb = RGBColor(100, 100, 100)
             connector.line.dash_style = 2 # Dashed line
 
-            current_y -= (shelf_height + Cm(0.2) * scale)
+            current_y -= (shelf_height + Inches(0.08)) # Use a fixed gap for consistency
 
     ppt_buffer = io.BytesIO()
     prs.save(ppt_buffer)
@@ -167,7 +168,7 @@ for i in range(num_bay_types):
     header = st.session_state[f"bay_type_name_{i}"].strip() or f"Bay Type {i + 1}"
 
     with st.expander(header, expanded=True):
-        col1, col2 = st.columns([2, 3]) # Create two columns for inputs and preview
+        col1, col2 = st.columns([2, 3])
         
         with col1:
             bay_name = st.text_input("Bay Type Name", value=st.session_state[f"bay_type_name_{i}"], key=f"bay_type_name_input_{i}", on_change=update_bay_type_name, args=(i,))
@@ -175,7 +176,6 @@ for i in range(num_bay_types):
             shelf_names = list(string.ascii_uppercase[:shelf_count])
             
             shelf_details = {}
-            total_width = 0
             
             for shelf_name in shelf_names:
                 st.divider()
@@ -187,7 +187,11 @@ for i in range(num_bay_types):
                 with c2: bin_w = st.number_input("Width", min_value=1.0, value=10.0, key=f"bin_w_{i}_{shelf_name}")
                 with c3: bin_d = st.number_input("Depth", min_value=1.0, value=10.0, key=f"bin_d_{i}_{shelf_name}")
                 shelf_details[shelf_name] = {'num_bins': num_bins, 'h': bin_h, 'w': bin_w, 'd': bin_d}
-                total_width = max(total_width, num_bins * bin_w)
+
+            # FIX: Correctly calculate total width once after collecting all shelf details
+            total_width = 0
+            if shelf_details:
+                total_width = max(s['num_bins'] * s['w'] for s in shelf_details.values())
 
             if bay_name.strip():
                 bay_types_data.append({
