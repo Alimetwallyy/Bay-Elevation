@@ -29,7 +29,7 @@ def generate_elevation_powerpoint(bay_types_data):
         p.font.bold = True
         p.font.size = Pt(28)
 
-        # --- FIX: Corrected Dynamic Scaling and Positioning ---
+        # --- Corrected Dynamic Scaling and Positioning ---
         # Calculate the true maximum width and height from the user's data
         max_bay_width_cm = max(s['num_bins'] * s['w'] for s in bay_type['shelf_details'].values()) if bay_type['shelf_details'] else 1
         max_bay_height_cm = sum(s['h'] for s in bay_type['shelf_details'].values()) if bay_type['shelf_details'] else 1
@@ -188,7 +188,6 @@ for i in range(num_bay_types):
                 with c3: bin_d = st.number_input("Depth", min_value=1.0, value=10.0, key=f"bin_d_{i}_{shelf_name}")
                 shelf_details[shelf_name] = {'num_bins': num_bins, 'h': bin_h, 'w': bin_w, 'd': bin_d}
 
-            # FIX: Correctly calculate total width once after collecting all shelf details
             total_width = 0
             if shelf_details:
                 total_width = max(s['num_bins'] * s['w'] for s in shelf_details.values())
