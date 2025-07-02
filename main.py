@@ -4,99 +4,160 @@ import string
 from pptx import Presentation
 from pptx.util import Inches, Cm, Pt
 from pptx.enum.shapes import MSO_SHAPE
+from pptx.dml.color import RGBColor
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 
 # --- Main PowerPoint Generation Function ---
 def generate_elevation_powerpoint(bay_types_data):
     """
-    Creates a PowerPoint presentation from bay type data.
-    Each bay type gets its own slide with a technical drawing.
+    Creates a professionally styled PowerPoint presentation from bay type data.
     """
     prs = Presentation()
-    # Set slide size to widescreen 16:9
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
-    blank_slide_layout = prs.slide_layouts[6] 
-    
+    blank_slide_layout = prs.slide_layouts[6]
+
     for bay_type in bay_types_data:
         slide = prs.slides.add_slide(blank_slide_layout)
         
         # Add a title to the slide
         title_shape = slide.shapes.add_textbox(Inches(0.5), Inches(0.2), Inches(12.33), Inches(0.5))
-        title_text = title_shape.text_frame
-        p = title_text.paragraphs[0]
+        p = title_shape.text_frame.paragraphs[0]
         p.text = bay_type['name']
+        p.font.name = 'Calibri'
         p.font.bold = True
-        p.font.size = Pt(24)
+        p.font.size = Pt(28)
 
-        # --- Drawing Logic ---
-        # Constants for drawing position and scale
-        start_x = Inches(2.0)
-        start_y = Inches(7.0) 
-        scale = Cm(0.2) # This scales the cm measurements to fit the slide
+        # --- Dynamic Scaling and Positioning ---
+        max_bay_width_cm = sum(shelf['w'] for shelf in bay_type['shelf_details'].values())
+        max_bay_height_cm = sum(shelf['h'] for shelf in bay_type['shelf_details'].values())
+        
+        # Define drawing area on the slide
+        drawing_area_width = Inches(8)
+        drawing_area_height = Inches(6)
+
+        # Calculate scale to fit the drawing within the area
+        scale_w = drawing_area_width / max_bay_width_cm if max_bay_width_cm > 0 else 0
+        scale_h = drawing_area_height / max_bay_height_cm if max_bay_height_cm > 0 else 0
+        scale = min(scale_w, scale_h) * 0.8 # Use 80% of the calculated scale for padding
+
+        # Center the drawing
+        total_drawing_width = max(s['num_bins'] * s['w'] for s in bay_type['shelf_details'].values()) * scale
+        start_x = Inches(6.67) - (total_drawing_width / 2) # Center of 13.33" slide
+        start_y = Inches(6.8)
+
         current_y = start_y
         
-        # Draw shelves from the bottom of the slide to the top
-        for i, shelf_name in enumerate(reversed(bay_type['shelves'])):
+        # Draw shelves from bottom to top
+        for shelf_name in reversed(bay_type['shelves']):
             shelf_info = bay_type['shelf_details'][shelf_name]
             num_bins = shelf_info['num_bins']
             bin_h = shelf_info['h'] * scale
             bin_w = shelf_info['w'] * scale
-            
             shelf_height = bin_h
             shelf_width = num_bins * bin_w
 
-            # Draw the main shelf rectangle (acts as a container)
-            slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, start_x, current_y - shelf_height, shelf_width, shelf_height)
-            
-            # Draw the individual bin dividers within the shelf
-            for j in range(num_bins):
-                bin_x = start_x + (j * bin_w)
-                slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, bin_x, current_y - shelf_height, bin_w, shelf_height)
+            # 3D effect by drawing a darker, offset shape behind
+            shadow_shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, start_x + Inches(0.05), current_y - shelf_height + Inches(0.05), shelf_width, shelf_height)
+            shadow_shape.fill.solid()
+            shadow_shape.fill.fore_color.rgb = RGBColor(180, 180, 180)
+            shadow_shape.line.fill.background()
 
-            # Add the shelf letter label (e.g., "A", "B") to the left of the shelf
+            # Main shelf rectangle
+            main_shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, start_x, current_y - shelf_height, shelf_width, shelf_height)
+            main_shape.fill.solid()
+            main_shape.fill.fore_color.rgb = RGBColor(240, 240, 240)
+            main_shape.line.color.rgb = RGBColor(0, 0, 0)
+
+            # Bin dividers
+            for j in range(1, num_bins):
+                line_x = start_x + (j * bin_w)
+                line = slide.shapes.add_connector(1, line_x, current_y - shelf_height, line_x, current_y) # 1 = straight line
+                line.line.color.rgb = RGBColor(120, 120, 120)
+
+            # Shelf Label
             label_box = slide.shapes.add_textbox(start_x - Inches(0.6), current_y - shelf_height, Inches(0.5), shelf_height)
-            label_box.text_frame.text = shelf_name
-            label_box.text_frame.paragraphs[0].font.size = Pt(10)
-
-            # Add dimension annotations to the right of the shelf
-            # This logic only adds the text if the dimensions are different from the shelf below it
-            is_first_of_dim = True
-            if i > 0:
-                prev_shelf_name = list(reversed(bay_type['shelves']))[i-1]
-                if bay_type['shelf_details'][prev_shelf_name] == shelf_info:
-                    is_first_of_dim = False
+            p = label_box.text_frame.paragraphs[0]
+            p.text = shelf_name
+            p.font.size = Pt(11)
+            p.font.name = 'Calibri'
             
-            if is_first_of_dim:
-                dim_x = start_x + shelf_width + Inches(0.2)
-                dim_y = current_y - (shelf_height / 2)
-                dim_text = f"H: {shelf_info['h']}cm\nW: {shelf_info['w']}cm\nD: {shelf_info['d']}cm"
-                dim_box = slide.shapes.add_textbox(dim_x, dim_y - Inches(0.25), Inches(1.5), Inches(0.5))
-                tf = dim_box.text_frame
-                tf.text = dim_text
-                for para in tf.paragraphs:
-                    para.font.size = Pt(9)
+            # Dimension Annotations with connector lines
+            dim_x = start_x + shelf_width + Inches(0.5)
+            dim_y = current_y - (shelf_height / 2)
+            dim_text = f"H: {shelf_info['h']}cm\nW: {shelf_info['w']}cm\nD: {shelf_info['d']}cm"
+            dim_box = slide.shapes.add_textbox(dim_x, dim_y - Inches(0.25), Inches(1.5), Inches(0.5))
+            tf = dim_box.text_frame
+            tf.text = dim_text
+            for para in tf.paragraphs:
+                para.font.size = Pt(9)
+                para.font.name = 'Calibri'
+            
+            # Connector line from annotation to shelf
+            connector = slide.shapes.add_connector(1, dim_x, dim_y, start_x + shelf_width, dim_y)
+            connector.line.color.rgb = RGBColor(100, 100, 100)
+            connector.line.dash_style = 2 # Dashed line
 
-            # Move the drawing cursor up for the next shelf, adding a small gap
-            current_y -= (shelf_height + Cm(0.2))
+            current_y -= (shelf_height + Cm(0.2) * scale)
 
-    # Save the final presentation to a memory buffer
     ppt_buffer = io.BytesIO()
     prs.save(ppt_buffer)
     ppt_buffer.seek(0)
     return ppt_buffer
 
+# --- Live Preview Function ---
+def draw_bay_preview(bay_type_data):
+    """
+    Generates a static preview of the bay elevation using Matplotlib.
+    """
+    if not bay_type_data or not bay_type_data['shelves']:
+        return None
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.set_aspect('equal')
+
+    current_y = 0
+    max_width = 0
+
+    # Draw from bottom up
+    for shelf_name in bay_type_data['shelves']:
+        shelf_info = bay_type_data['shelf_details'][shelf_name]
+        num_bins = shelf_info['num_bins']
+        bin_h = shelf_info['h']
+        bin_w = shelf_info['w']
+        shelf_width = num_bins * bin_w
+        max_width = max(max_width, shelf_width)
+
+        # Shelf rectangle
+        ax.add_patch(patches.Rectangle((0, current_y), shelf_width, bin_h, fill=True, facecolor='#E0E0E0', edgecolor='black'))
+        
+        # Bin dividers
+        for j in range(1, num_bins):
+            ax.plot([j * bin_w, j * bin_w], [current_y, current_y + bin_h], color='gray')
+            
+        # Shelf label
+        ax.text(-5, current_y + bin_h / 2, shelf_name, ha='right', va='center', fontsize=10)
+
+        current_y += bin_h
+
+    ax.set_xlim(-20, max_width + 50)
+    ax.set_ylim(0, current_y + 10)
+    ax.axis('off')
+    
+    st.pyplot(fig)
+
 # --- Streamlit App UI ---
 st.set_page_config(layout="wide")
 st.title("Bay Elevation Generator 📐")
 st.markdown("Define your bay types, their shelves, and bin configurations to generate a PowerPoint elevation drawing.")
-st.info("ℹ️ **Note:** This application requires `python-pptx`. Please ensure it is in your requirements.txt file.")
+st.info("ℹ️ **Note:** This application requires `python-pptx` and `matplotlib`. Please ensure they are in your requirements.txt file.")
 
 num_bay_types = st.number_input("How many bay types do you want to define?", min_value=1, max_value=50, value=1, key="num_bay_types")
 
 bay_types_data = []
 
 for i in range(num_bay_types):
-    # Use session_state to keep track of bay type names dynamically
     if f"bay_type_name_{i}" not in st.session_state:
         st.session_state[f"bay_type_name_{i}"] = f"Bay Type {i + 1}"
 
@@ -106,40 +167,48 @@ for i in range(num_bay_types):
     header = st.session_state[f"bay_type_name_{i}"].strip() or f"Bay Type {i + 1}"
 
     with st.expander(header, expanded=True):
-        bay_name = st.text_input("Bay Type Name", value=st.session_state[f"bay_type_name_{i}"], key=f"bay_type_name_input_{i}", on_change=update_bay_type_name, args=(i,))
+        col1, col2 = st.columns([2, 3]) # Create two columns for inputs and preview
         
-        shelf_count = st.number_input("Number of shelves in this bay?", min_value=1, max_value=26, value=3, key=f"elevation_shelf_count_{i}")
-        shelf_names = list(string.ascii_uppercase[:shelf_count])
-        
-        shelf_details = {}
-        for shelf_name in shelf_names:
-            st.divider()
-            st.markdown(f"**Configuration for Shelf {shelf_name}**")
+        with col1:
+            bay_name = st.text_input("Bay Type Name", value=st.session_state[f"bay_type_name_{i}"], key=f"bay_type_name_input_{i}", on_change=update_bay_type_name, args=(i,))
+            shelf_count = st.number_input("Number of shelves in this bay?", min_value=1, max_value=26, value=3, key=f"elevation_shelf_count_{i}")
+            shelf_names = list(string.ascii_uppercase[:shelf_count])
             
-            num_bins = st.number_input("Number of bins in this shelf?", min_value=1, max_value=50, value=5, key=f"num_bins_{i}_{shelf_name}")
+            shelf_details = {}
+            total_width = 0
             
-            st.markdown(f"**Bin Dimensions for all bins in Shelf {shelf_name} (cm)**")
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                bin_h = st.number_input("Height", min_value=1.0, value=10.0, key=f"bin_h_{i}_{shelf_name}")
-            with c2:
-                bin_w = st.number_input("Width", min_value=1.0, value=10.0, key=f"bin_w_{i}_{shelf_name}")
-            with c3:
-                bin_d = st.number_input("Depth", min_value=1.0, value=10.0, key=f"bin_d_{i}_{shelf_name}")
-            
-            shelf_details[shelf_name] = {'num_bins': num_bins, 'h': bin_h, 'w': bin_w, 'd': bin_d}
+            for shelf_name in shelf_names:
+                st.divider()
+                st.markdown(f"**Configuration for Shelf {shelf_name}**")
+                num_bins = st.number_input("Number of bins in this shelf?", min_value=1, max_value=50, value=5, key=f"num_bins_{i}_{shelf_name}")
+                st.markdown(f"**Bin Dimensions for all bins in Shelf {shelf_name} (cm)**")
+                c1, c2, c3 = st.columns(3)
+                with c1: bin_h = st.number_input("Height", min_value=1.0, value=10.0, key=f"bin_h_{i}_{shelf_name}")
+                with c2: bin_w = st.number_input("Width", min_value=1.0, value=10.0, key=f"bin_w_{i}_{shelf_name}")
+                with c3: bin_d = st.number_input("Depth", min_value=1.0, value=10.0, key=f"bin_d_{i}_{shelf_name}")
+                shelf_details[shelf_name] = {'num_bins': num_bins, 'h': bin_h, 'w': bin_w, 'd': bin_d}
+                total_width = max(total_width, num_bins * bin_w)
 
-        # Add the collected data to our list if a name has been provided
-        if bay_name.strip():
-            bay_types_data.append({
+            if bay_name.strip():
+                bay_types_data.append({
+                    "name": bay_name.strip(),
+                    "shelves": shelf_names,
+                    "shelf_details": shelf_details
+                })
+        
+        with col2:
+            st.markdown("**Live Preview**")
+            current_bay_data_for_preview = {
                 "name": bay_name.strip(),
                 "shelves": shelf_names,
                 "shelf_details": shelf_details
-            })
+            }
+            draw_bay_preview(current_bay_data_for_preview)
+            st.info(f"Calculated Max Bay Width: **{total_width:.2f} cm**")
+
 
 # --- Generate Button and Download Logic ---
 if st.button("Generate PowerPoint Elevation", key="generate_ppt"):
-    # Basic validation to ensure bay types have names
     if any(not bay['name'] for bay in bay_types_data):
         st.error("Please provide a name for all bay types.")
     else:
