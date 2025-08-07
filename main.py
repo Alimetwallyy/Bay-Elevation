@@ -5,6 +5,9 @@ import os
 from datetime import datetime
 import pandas as pd
 
+# Debug: Confirm script start
+st.write("Script started successfully!")
+
 # Initialize session state for layout data
 if 'layout_data' not in st.session_state:
     st.session_state.layout_data = []
@@ -76,29 +79,13 @@ try:
             for purpose, color in colors.items():
                 st.write(f"- {purpose}: <span style='color:{color}'>█</span>", unsafe_allow_html=True)
 
-            # Save to file (JSON and SVG)
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("Save to JSON"):
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    filename = f"layout_{timestamp}.json"
-                    with open(filename, 'w') as f:
-                        json.dump(data_to_visualize, f)
-                    st.success(f"Layout saved as {filename}")
-            with col2:
-                if st.button("Export to SVG"):
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    svg_filename = f"layout_{timestamp}.svg"
-                    fig.write_image(svg_filename, format="svg")
-                    with open(svg_filename, "rb") as f:
-                        st.download_button(
-                            label="Download SVG",
-                            data=f,
-                            file_name=svg_filename,
-                            mime="image/svg+xml"
-                        )
-                        os.remove(svg_filename)  # Clean up temporary file
-                    st.success(f"SVG exported as {svg_filename}")
+            # Save to file (JSON only for now, SVG removed due to kaleido issues)
+            if st.button("Save to JSON"):
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"layout_{timestamp}.json"
+                with open(filename, 'w') as f:
+                    json.dump(data_to_visualize, f)
+                st.success(f"Layout saved as {filename}")
 
     elif action == "Load Saved Layout":
         uploaded_file = st.file_uploader("Upload JSON Layout File", type="json")
