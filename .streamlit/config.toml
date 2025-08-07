@@ -1,0 +1,12 @@
+[server]
+enableCORS = false
+port = 8501
+headless = true
+enableXsrfProtection = false
+
+[logger]
+level = "debug"
+
+[theme]
+base = "light"
+primaryColor = "#FF4B4B"
