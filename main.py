@@ -1,246 +1,280 @@
 import streamlit as st
-import plotly.graph_objects as go
-import json
-import os
-from datetime import datetime
 import pandas as pd
-
-# Debug: Confirm script start
-st.write("Script started successfully!")
-
-# Initialize session state for layout data
-if 'layout_data' not in st.session_state:
-    st.session_state.layout_data = []
-import streamlit as st
+import io
 import plotly.graph_objects as go
-import json
-import os
-from datetime import datetime
-import pandas as pd
+import seaborn as sns
+import string
+import re
+from openpyxl.styles import PatternFill, Alignment, Font, Border, Side
+from openpyxl.utils import get_column_letter
 
-# Debug: Confirm script start
-st.write("Script started successfully!")
+# Add "Created By Alimomet" in top left
+st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@700&display=swap');
+    .created-by {
+        position: absolute;
+        top: 10px;
+        left: 20px;
+        font-family: 'Roboto', Arial, Helvetica, sans-serif;
+        font-size: 14px;
+        font-weight: bold;
+        color: #333333;
+        z-index: 1000;
+    }
+    </style>
+    <div class="created-by">Created By Alimomet</div>
+""", unsafe_allow_html=True)
 
-# Initialize session state for layout data
-if 'layout_data' not in st.session_state:
-    st.session_state.layout_data = []
+def generate_bin_labels_table(group_name, bay_ids, shelves, bins_per_shelf):
+    data = []
+    for bay in bay_ids:
+        try:
+            base_label = bay.replace("BAY-", "")
+            # Extract aisle
+            aisle_match = re.search(r'\d{3}', base_label)
+            aisle = aisle_match.group(0) if aisle_match else ""
+            # Extract numeric part at end (works for 2 or 3 digits)
+            num_match = re.search(r'(\d+)$', base_label)
+            if not num_match:
+                raise ValueError(f"No numeric suffix found in {bay}")
+            base_number = int(num_match.group(1))
+            prefix = base_label[:num_match.start()]  # everything before the number
 
-st.title("Advanced Warehouse Layout Designer")
+            max_bins = max(bins_per_shelf.get(shelf, 0) for shelf in shelves) if shelves else 1
 
-try:
-    # Sidebar for navigation
-    st.sidebar.header("Options")
-    action = st.sidebar.radio("Action", ["Design New Layout", "Load Saved Layout"])
+            for i in range(max_bins):
+                row = {
+                    'BAY TYPE': group_name,
+                    'AISLE': aisle,
+                    'BAY ID': bay
+                }
+                for shelf in shelves:
+                    shelf_bin_count = bins_per_shelf.get(shelf, 0)
+                    if i < shelf_bin_count:
+                        bin_label = f"{prefix}{shelf}{base_number + i:0{len(num_match.group(1))}d}"
+                        row[shelf] = bin_label
+                    else:
+                        row[shelf] = None
+                data.append(row)
+        except Exception as e:
+            st.error(f"Error processing bay ID '{bay}': {str(e)}")
+    return pd.DataFrame(data)
 
-    if action == "Design New Layout":
-        # Input for number of MODs/Areas
-        num_mods = st.number_input("Number of MODs/Areas", min_value=1, value=2, step=1)
+def plot_bin_diagram(bay_id, shelves, bins_per_shelf, base_number, num_digits):
+    try:
+        fig = go.Figure()
+        colors = sns.color_palette("colorblind", len(shelves) if shelves else 1).as_hex()
+        shelf_colors = {shelf: colors[i % len(colors)] for i, shelf in enumerate(shelves)} if shelves else {}
+        prefix = re.sub(r'\d+$', '', bay_id.replace("BAY-", ""))
 
-        # Collect AISLE details
-        aisle_data = []
-        for i in range(num_mods):
-            st.subheader(f"MOD {i+1}")
-            with st.expander(f"Configure MOD {i+1}"):
-                num_aisles = st.number_input(f"Number of AISLEs in MOD {i+1}", min_value=1, value=2, step=1)
-                for j in range(num_aisles):
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        purpose = st.selectbox(f"AISLE {j+1} Purpose (MOD {i+1})", ["General", "Groceries", "Electronics", "Clothing"], key=f"purpose_{i}_{j}")
-                    with col2:
-                        number = st.number_input(f"AISLE {j+1} Number (MOD {i+1})", min_value=1, value=j+1, step=1, key=f"number_{i}_{j}")
-                    aisle_data.append({"MOD": i+1, "AISLE Number": number, "Purpose": purpose})
+        for col_idx, shelf in enumerate(shelves):
+            shelf_bins = bins_per_shelf.get(shelf, 0)
+            for i in range(shelf_bins):
+                bin_label = f"{prefix}{shelf}{base_number + i:0{num_digits}d}"
+                x0, x1 = col_idx - 0.4, col_idx + 0.4
+                y0, y1 = -i - 0.4, -i + 0.4
+                fig.add_shape(
+                    type="rect",
+                    x0=x0, x1=x1, y0=y0, y1=y1,
+                    fillcolor=shelf_colors.get(shelf, "lightblue"),
+                    line=dict(color="black"),
+                )
+                fig.add_trace(go.Scatter(
+                    x=[(x0 + x1) / 2],
+                    y=[(y0 + y1) / 2],
+                    text=[bin_label],
+                    mode="text",
+                    hoverinfo="text",
+                    showlegend=False,
+                ))
 
-        # Save to session state
-        if st.button("Save Layout"):
-            st.session_state.layout_data = aisle_data
-            st.success("Layout saved to session!")
+        fig.update_layout(
+            title=f"Bin Layout for {bay_id}",
+            xaxis=dict(
+                tickmode="array",
+                tickvals=list(range(len(shelves))) if shelves else [0],
+                ticktext=shelves if shelves else ["No Shelves"],
+                showgrid=False, zeroline=False,
+            ),
+            yaxis=dict(showgrid=False, zeroline=False, autorange="reversed"),
+            showlegend=bool(shelves),
+            legend_title_text="Shelves",
+            width=200 * (len(shelves) if shelves else 1),
+            height=100 * (max(bins_per_shelf.values(), default=1) if bins_per_shelf else 1),
+            margin=dict(l=20, r=20, t=50, b=20),
+        )
 
-        # Visualize
-        if aisle_data or st.session_state.layout_data:
-            data_to_visualize = aisle_data if not st.session_state.layout_data else st.session_state.layout_data
-            df = pd.DataFrame(data_to_visualize)
+        for shelf in shelves:
+            fig.add_trace(go.Scatter(
+                x=[None], y=[None],
+                mode="markers", name=shelf,
+                marker=dict(size=10, color=shelf_colors.get(shelf, "lightblue")),
+            ))
 
-            # Plotly visualization
-            fig = go.Figure()
-            colors = {"General": "green", "Groceries": "pink", "Electronics": "blue", "Clothing": "orange"}
-            for mod in df['MOD'].unique():
-                mod_data = df[df['MOD'] == mod]
-                for _, row in mod_data.iterrows():
-                    fig.add_trace(go.Bar(
-                        y=[f"MOD {mod} - AISLE {row['AISLE Number']}"],
-                        x=[1],
-                        orientation='h',
-                        marker_color=colors[row['Purpose']],
-                        text=row['Purpose'],
-                        textposition='auto'
-                    ))
+        return fig
+    except Exception as e:
+        st.error(f"Error generating diagram for '{bay_id}': {str(e)}")
+        return None
 
-            fig.update_layout(
-                title="Warehouse Layout",
-                xaxis_title="",
-                yaxis_title="",
-                bargap=0.2
-            )
-            st.plotly_chart(fig)
+def style_excel(writer, sheet_name, df, shelves):
+    try:
+        ws = writer.sheets[sheet_name]
+        yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+        border = Border(left=Side(style='thin'), right=Side(style='thin'),
+                        top=Side(style='thin'), bottom=Side(style='thin'))
+        bold_font = Font(bold=True)
+        center_align = Alignment(horizontal="center", vertical="center")
+        
+        hex_colors = [
+            "339900", "9B30FF", "FFFF00", "00FFFF", "CC0000", "F88017",
+            "FF00FF", "996600", "00FF00", "FF6565", "9999FE"
+        ]
+        styling_colors = ["FFFFFF"] + hex_colors
 
-            # Summary
-            st.write("### Summary")
-            st.table(df)
+        if shelves:
+            ws.merge_cells('A1:C1')
+            ws['A1'] = "HEX COLOR CODES ->"
+            ws['A1'].fill = yellow_fill
+            ws['A1'].font = bold_font
+            ws['A1'].alignment = center_align
+            ws['A1'].border = border
+            
+            for i, hex_color in enumerate(styling_colors[:len(shelves)]):
+                col_letter = get_column_letter(4 + i)
+                ws[f"{col_letter}1"] = hex_color
+                ws[f"{col_letter}1"].fill = PatternFill(start_color=hex_color, end_color=hex_color, fill_type="solid")
+                ws[f"{col_letter}1"].font = bold_font
+                ws[f"{col_letter}1"].alignment = center_align
+                ws[f"{col_letter}1"].border = border
+                ws[f"{col_letter}2"] = shelves[i]
+                ws[f"{col_letter}2"].fill = PatternFill(start_color=hex_color, end_color=hex_color, fill_type="solid")
+                ws[f"{col_letter}2"].font = bold_font
+                ws[f"{col_letter}2"].alignment = center_align
+                ws[f"{col_letter}2"].border = border
 
-            # Legend
-            st.write("### Legend")
-            for purpose, color in colors.items():
-                st.write(f"- {purpose}: <span style='color:{color}'>█</span>", unsafe_allow_html=True)
+        header_row = 2 if shelves else 1
+        for col in range(1, df.shape[1] + 1):
+            cell = ws.cell(row=header_row, column=col)
+            cell.font = bold_font
+            cell.alignment = center_align
+            cell.border = border
 
-            # Save to file (JSON only for now, SVG removed due to kaleido issues)
-            if st.button("Save to JSON"):
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"layout_{timestamp}.json"
-                with open(filename, 'w') as f:
-                    json.dump(data_to_visualize, f)
-                st.success(f"Layout saved as {filename}")
+        for row in ws.iter_rows(min_row=header_row + 1, max_row=ws.max_row, max_col=ws.max_column):
+            for cell in row:
+                if cell.value is not None:
+                    cell.font = bold_font
+                    cell.alignment = center_align
+                    cell.border = border
+    except Exception as e:
+        st.error(f"Error styling Excel sheet '{sheet_name}': {str(e)}")
 
-    elif action == "Load Saved Layout":
-        uploaded_file = st.file_uploader("Upload JSON Layout File", type="json")
-        if uploaded_file:
-            layout_data = json.load(uploaded_file)
-            st.session_state.layout_data = layout_data
-            df = pd.DataFrame(layout_data)
-            st.write("### Loaded Layout")
-            st.table(df)
+def check_duplicate_bay_ids(bay_groups):
+    errors = []
+    all_bay_ids = {}
+    for group in bay_groups:
+        group_name = group["name"]
+        bay_ids = [bay_id.strip().upper() for bay_id in group["bays"] if bay_id.strip()]
+        seen_in_group = set()
+        for bay_id in bay_ids:
+            if bay_id in seen_in_group:
+                errors.append(f"⚠️ Duplicate bay ID '{bay_id}' found in {group_name}.")
+            seen_in_group.add(bay_id)
+            if bay_id not in all_bay_ids:
+                all_bay_ids[bay_id] = [group_name]
+            elif group_name not in all_bay_ids[bay_id]:
+                all_bay_ids[bay_id].append(group_name)
+    for bay_id, groups in all_bay_ids.items():
+        if len(groups) > 1:
+            errors.append(f"⚠️ Bay ID '{bay_id}' is duplicated across groups: {', '.join(groups)}.")
+    return errors
 
-            # Visualize loaded layout
-            fig = go.Figure()
-            colors = {"General": "green", "Groceries": "pink", "Electronics": "blue", "Clothing": "orange"}
-            for mod in df['MOD'].unique():
-                mod_data = df[df['MOD'] == mod]
-                for _, row in mod_data.iterrows():
-                    fig.add_trace(go.Bar(
-                        y=[f"MOD {mod} - AISLE {row['AISLE Number']}"],
-                        x=[1],
-                        orientation='h',
-                        marker_color=colors[row['Purpose']],
-                        text=row['Purpose'],
-                        textposition='auto'
-                    ))
+# --- Streamlit App ---
+st.title("Space Launch Quick Tools")
+st.header("Bin Label Generator 🏷️", divider='rainbow')
+st.markdown("Define bay groups, shelves, and bins per shelf to generate structured bin labels. Supports both 2-digit and 3-digit numbers after shelf letter.")
 
-            fig.update_layout(
-                title="Loaded Warehouse Layout",
-                xaxis_title="",
-                yaxis_title="",
-                bargap=0.2
-            )
-            st.plotly_chart(fig)
+bay_groups = []
+duplicate_errors = []
+num_groups = st.number_input("How many bay groups do you want to define?", min_value=1, max_value=50, value=1)
 
-except Exception as e:
-    st.error(f"An error occurred: {str(e)}")
-st.title("Advanced Warehouse Layout Designer")
+for group_idx in range(num_groups):
+    if f"group_name_{group_idx}" not in st.session_state:
+        st.session_state[f"group_name_{group_idx}"] = f"Bay Group {group_idx + 1}"
 
-try:
-    # Sidebar for navigation
-    st.sidebar.header("Options")
-    action = st.sidebar.radio("Action", ["Design New Layout", "Load Saved Layout"])
+    def update_group_name(group_idx=group_idx):
+        st.session_state[f"group_name_{group_idx}"] = st.session_state[f"group_name_input_{group_idx}"]
 
-    if action == "Design New Layout":
-        # Input for number of MODs/Areas
-        num_mods = st.number_input("Number of MODs/Areas", min_value=1, value=2, step=1)
+    header = st.session_state[f"group_name_{group_idx}"].strip() or f"Bay Group {group_idx + 1}"
 
-        # Collect AISLE details
-        aisle_data = []
-        for i in range(num_mods):
-            st.subheader(f"MOD {i+1}")
-            with st.expander(f"Configure MOD {i+1}"):
-                num_aisles = st.number_input(f"Number of AISLEs in MOD {i+1}", min_value=1, value=2, step=1)
-                for j in range(num_aisles):
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        purpose = st.selectbox(f"AISLE {j+1} Purpose (MOD {i+1})", ["General", "Groceries", "Electronics", "Clothing"], key=f"purpose_{i}_{j}")
-                    with col2:
-                        number = st.number_input(f"AISLE {j+1} Number (MOD {i+1})", min_value=1, value=j+1, step=1, key=f"number_{i}_{j}")
-                    aisle_data.append({"MOD": i+1, "AISLE Number": number, "Purpose": purpose})
+    with st.expander(header, expanded=True):
+        st.text_input("Group Name", value=st.session_state[f"group_name_{group_idx}"], key=f"group_name_input_{group_idx}", on_change=update_group_name)
+        bays_input = st.text_area(f"Enter bay IDs (e.g., BAY-P-1-XXXXAXXX or BAY-P-1-XXXXAXX)", key=f"bays_{group_idx}")
+        shelf_count = st.number_input("How many shelves?", min_value=1, max_value=26, value=3, key=f"shelf_count_{group_idx}")
+        shelves = list(string.ascii_uppercase[:shelf_count])
+        st.divider()
+        bins_per_shelf = {}
+        st.markdown("**Bins per Shelf**")
+        for shelf in shelves:
+            count = st.number_input(f"Number of bins in shelf {shelf}", min_value=1, max_value=100, value=5, key=f"bins_{group_idx}_{shelf}")
+            bins_per_shelf[shelf] = count
+        if bays_input:
+            bay_list = [b.strip() for b in bays_input.splitlines() if b.strip()]
+            if bay_list:
+                bay_groups.append({
+                    "name": st.session_state[f"group_name_{group_idx}"].strip() or f"Bay Group {group_idx + 1}",
+                    "bays": bay_list,
+                    "shelves": shelves,
+                    "bins_per_shelf": bins_per_shelf
+                })
+                temp_errors = check_duplicate_bay_ids(bay_groups)
+                if temp_errors:
+                    st.markdown("**Errors in this group:**")
+                    for error in temp_errors:
+                        st.warning(error)
 
-        # Save to session state
-        if st.button("Save Layout"):
-            st.session_state.layout_data = aisle_data
-            st.success("Layout saved to session!")
+if bay_groups:
+    duplicate_errors = check_duplicate_bay_ids(bay_groups)
+    if duplicate_errors:
+        for error in duplicate_errors:
+            st.warning(error)
+else:
+    st.warning("⚠️ Please define at least one bay group with valid bay IDs.")
 
-        # Visualize
-        if aisle_data or st.session_state.layout_data:
-            data_to_visualize = aisle_data if not st.session_state.layout_data else st.session_state.layout_data
-            df = pd.DataFrame(data_to_visualize)
-
-            # Plotly visualization
-            fig = go.Figure()
-            colors = {"General": "green", "Groceries": "pink", "Electronics": "blue", "Clothing": "orange"}
-            for mod in df['MOD'].unique():
-                mod_data = df[df['MOD'] == mod]
-                for _, row in mod_data.iterrows():
-                    fig.add_trace(go.Bar(
-                        y=[f"MOD {mod} - AISLE {row['AISLE Number']}"],
-                        x=[1],
-                        orientation='h',
-                        marker_color=colors[row['Purpose']],
-                        text=row['Purpose'],
-                        textposition='auto'
-                    ))
-
-            fig.update_layout(
-                title="Warehouse Layout",
-                xaxis_title="",
-                yaxis_title="",
-                bargap=0.2
-            )
-            st.plotly_chart(fig)
-
-            # Summary
-            st.write("### Summary")
-            st.table(df)
-
-            # Legend
-            st.write("### Legend")
-            for purpose, color in colors.items():
-                st.write(f"- {purpose}: <span style='color:{color}'>█</span>", unsafe_allow_html=True)
-
-            # Save to file (JSON only for now, SVG removed due to kaleido issues)
-            if st.button("Save to JSON"):
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"layout_{timestamp}.json"
-                with open(filename, 'w') as f:
-                    json.dump(data_to_visualize, f)
-                st.success(f"Layout saved as {filename}")
-
-    elif action == "Load Saved Layout":
-        uploaded_file = st.file_uploader("Upload JSON Layout File", type="json")
-        if uploaded_file:
-            layout_data = json.load(uploaded_file)
-            st.session_state.layout_data = layout_data
-            df = pd.DataFrame(layout_data)
-            st.write("### Loaded Layout")
-            st.table(df)
-
-            # Visualize loaded layout
-            fig = go.Figure()
-            colors = {"General": "green", "Groceries": "pink", "Electronics": "blue", "Clothing": "orange"}
-            for mod in df['MOD'].unique():
-                mod_data = df[df['MOD'] == mod]
-                for _, row in mod_data.iterrows():
-                    fig.add_trace(go.Bar(
-                        y=[f"MOD {mod} - AISLE {row['AISLE Number']}"],
-                        x=[1],
-                        orientation='h',
-                        marker_color=colors[row['Purpose']],
-                        text=row['Purpose'],
-                        textposition='auto'
-                    ))
-
-            fig.update_layout(
-                title="Loaded Warehouse Layout",
-                xaxis_title="",
-                yaxis_title="",
-                bargap=0.2
-            )
-            st.plotly_chart(fig)
-
-except Exception as e:
-    st.error(f"An error occurred: {str(e)}")
-
+if st.button("Generate Bin Labels", disabled=bool(duplicate_errors or not bay_groups)):
+    with st.spinner("Generating bin labels and diagrams..."):
+        total_labels_generated = 0
+        total_bays_processed = 0
+        output = io.BytesIO()
+        try:
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                for group in bay_groups:
+                    df = generate_bin_labels_table(group["name"], group["bays"], group["shelves"], group["bins_per_shelf"])
+                    if not df.empty:
+                        shelf_cols = [col for col in df.columns if col not in ['BAY TYPE', 'AISLE', 'BAY ID']]
+                        total_labels_generated += df[shelf_cols].count().sum()
+                        total_bays_processed += df['BAY ID'].nunique()
+                        df.to_excel(writer, index=False, startrow=1, sheet_name=group["name"])
+                        style_excel(writer, group["name"], df, group["shelves"])
+            output.seek(0)
+            st.success(f"✅ Success! Generated {total_labels_generated} labels for {total_bays_processed} bays across {len(bay_groups)} groups.")
+            st.download_button(label="📥 Download Excel File", data=output, file_name="bin_labels.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.subheader("🖼️ Interactive Bin Layout Diagrams")
+            for group in bay_groups:
+                for bay_id in group['bays']:
+                    shelves = group['shelves']
+                    bins_per_shelf = group['bins_per_shelf']
+                    try:
+                        num_match = re.search(r'(\d+)$', bay_id.replace("BAY-", ""))
+                        if not num_match:
+                            continue
+                        base_number = int(num_match.group(1))
+                        num_digits = len(num_match.group(1))
+                        with st.expander(f"View Diagram for **{bay_id}**"):
+                            fig = plot_bin_diagram(bay_id, shelves, bins_per_shelf, base_number, num_digits)
+                            if fig:
+                                st.plotly_chart(fig, use_container_width=True)
+                    except Exception as e:
+                        st.error(f"Error processing diagram for bay ID '{bay_id}': {str(e)}")
+        except Exception as e:
+            st.error(f"Error generating output: {str(e)}")
