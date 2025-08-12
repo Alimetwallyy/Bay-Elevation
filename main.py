@@ -26,16 +26,35 @@ st.markdown("""
     <div class="created-by">Created By Alimomet</div>
 """, unsafe_allow_html=True)
 
+def extract_bay_number(bay_id):
+    """
+    Extracts the numeric bay number at the end of the bay ID (ignores the shelf letter).
+    Example: BAY-P-3-C171A211 -> 211
+    """
+    base_label = bay_id.replace("BAY-", "")
+    match = re.search(r'([A-Z])?(\d+)$', base_label)
+    if match:
+        return int(match.group(2))
+    return float('inf')  # If it can't parse, push to the bottom
+
 def generate_bin_labels_table(group_name, bay_ids, shelves, bins_per_shelf):
+    # Sort bay_ids first by aisle, then by bay number
+    def sort_key(bid):
+        base_label = bid.replace("BAY-", "")
+        aisle_match = re.search(r'\d{3}', base_label)
+        aisle = int(aisle_match.group(0)) if aisle_match else float('inf')
+        bay_number = extract_bay_number(bid)
+        return (aisle, bay_number)
+
+    sorted_bay_ids = sorted(bay_ids, key=sort_key)
+
     data = []
-    for bay in bay_ids:
+    for bay in sorted_bay_ids:
         try:
             base_label = bay.replace("BAY-", "")
-            # Extract aisle (three-digit part like 172)
             aisle_match = re.search(r'\d{3}', base_label)
             aisle = aisle_match.group(0) if aisle_match else ""
 
-            # Match optional shelf letter + trailing digits (works for A12 or A123 or just 123)
             match = re.search(r'([A-Z])?(\d+)$', base_label)
             if not match:
                 raise ValueError(f"No numeric suffix found in '{bay}'")
@@ -43,9 +62,7 @@ def generate_bin_labels_table(group_name, bay_ids, shelves, bins_per_shelf):
             base_number = int(match.group(2))
             num_digits = len(match.group(2))
 
-            # Remove optional shelf letter + digits to produce prefix (so we don't duplicate shelf letter)
             prefix = re.sub(r'[A-Z]?\d+$', '', base_label)
-
             max_bins = max(bins_per_shelf.get(shelf, 0) for shelf in shelves) if shelves else 1
 
             for i in range(max_bins):
@@ -57,7 +74,6 @@ def generate_bin_labels_table(group_name, bay_ids, shelves, bins_per_shelf):
                 for shelf in shelves:
                     shelf_bin_count = bins_per_shelf.get(shelf, 0)
                     if i < shelf_bin_count:
-                        # build label as: prefix + shelf_letter + zero-padded number
                         bin_label = f"{prefix}{shelf}{(base_number + i):0{num_digits}d}"
                         row[shelf] = bin_label
                     else:
@@ -74,7 +90,6 @@ def plot_bin_diagram(bay_id, shelves, bins_per_shelf, base_number, num_digits):
         shelf_colors = {shelf: colors[i % len(colors)] for i, shelf in enumerate(shelves)} if shelves else {}
 
         base_label = bay_id.replace("BAY-", "")
-        # Remove optional trailing shelf letter + digits so we don't double the shelf letter
         prefix = re.sub(r'[A-Z]?\d+$', '', base_label)
 
         for col_idx, shelf in enumerate(shelves):
@@ -291,7 +306,7 @@ if st.button("Generate Bin Labels", disabled=bool(duplicate_errors or not bay_gr
             st.download_button(label="📥 Download Excel File", data=output, file_name="bin_labels.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             st.subheader("🖼️ Interactive Bin Layout Diagrams")
             for group in bay_groups:
-                for bay_id in group['bays']:
+                for bay_id in sorted(group['bays'], key=lambda x: (int(re.search(r'\d{3}', x).group(0)), extract_bay_number(x))):
                     shelves = group['shelves']
                     bins_per_shelf = group['bins_per_shelf']
                     try:
