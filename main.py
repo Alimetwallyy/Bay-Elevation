@@ -26,50 +26,44 @@ st.markdown("""
     <div class="created-by">Created By Alimomet</div>
 """, unsafe_allow_html=True)
 
-def extract_bay_number(bay_id):
-    """
-    Extracts the numeric bay number at the end of the bay ID (ignores the shelf letter).
-    Example: BAY-P-3-C171A211 -> 211
-    """
-    base_label = bay_id.replace("BAY-", "")
-    match = re.search(r'([A-Z])?(\d+)$', base_label)
+# --- Helper functions ---
+def split_prefix_and_number(label):
+    """Split into prefix and trailing number (with shelf letter kept in prefix)."""
+    match = re.match(r"^(.*?)(\d+)$", label)
     if match:
-        return int(match.group(2))
-    return float('inf')  # If it can't parse, push to the bottom
+        return match.group(1), int(match.group(2)), len(match.group(2))
+    return label, None, None
+
+def extract_numeric_suffix(bay_id):
+    """Get the trailing number for sorting purposes."""
+    base_label = bay_id.replace("BAY-", "")
+    match = re.search(r"(\d+)$", base_label)
+    if match:
+        return int(match.group(1))
+    return float('inf')  # unknowns go last
 
 def generate_bin_labels_table(group_name, bay_ids, shelves, bins_per_shelf):
-    # Sort bay_ids first by aisle, then by bay number
-    def sort_key(bid):
-        base_label = bid.replace("BAY-", "")
-        aisle_match = re.search(r'\d{3}', base_label)
-        aisle = int(aisle_match.group(0)) if aisle_match else float('inf')
-        bay_number = extract_bay_number(bid)
-        return (aisle, bay_number)
-
-    sorted_bay_ids = sorted(bay_ids, key=sort_key)
-
     data = []
-    for bay in sorted_bay_ids:
+    # Sort bay IDs by numeric suffix
+    bay_ids = sorted(bay_ids, key=extract_numeric_suffix)
+
+    for bay in bay_ids:
         try:
             base_label = bay.replace("BAY-", "")
-            aisle_match = re.search(r'\d{3}', base_label)
+            aisle_match = re.search(r"\d{3}", base_label)
             aisle = aisle_match.group(0) if aisle_match else ""
 
-            match = re.search(r'([A-Z])?(\d+)$', base_label)
-            if not match:
+            prefix, base_number, num_digits = split_prefix_and_number(base_label)
+            if base_number is None:
                 raise ValueError(f"No numeric suffix found in '{bay}'")
 
-            base_number = int(match.group(2))
-            num_digits = len(match.group(2))
-
-            prefix = re.sub(r'[A-Z]?\d+$', '', base_label)
             max_bins = max(bins_per_shelf.get(shelf, 0) for shelf in shelves) if shelves else 1
 
             for i in range(max_bins):
                 row = {
-                    'BAY TYPE': group_name,
-                    'AISLE': aisle,
-                    'BAY ID': bay
+                    "BAY TYPE": group_name,
+                    "AISLE": aisle,
+                    "BAY ID": bay
                 }
                 for shelf in shelves:
                     shelf_bin_count = bins_per_shelf.get(shelf, 0)
@@ -90,7 +84,7 @@ def plot_bin_diagram(bay_id, shelves, bins_per_shelf, base_number, num_digits):
         shelf_colors = {shelf: colors[i % len(colors)] for i, shelf in enumerate(shelves)} if shelves else {}
 
         base_label = bay_id.replace("BAY-", "")
-        prefix = re.sub(r'[A-Z]?\d+$', '', base_label)
+        prefix, _, _ = split_prefix_and_number(base_label)
 
         for col_idx, shelf in enumerate(shelves):
             shelf_bins = bins_per_shelf.get(shelf, 0)
@@ -100,21 +94,15 @@ def plot_bin_diagram(bay_id, shelves, bins_per_shelf, base_number, num_digits):
                 y0, y1 = -i - 0.4, -i + 0.4
                 fig.add_shape(
                     type="rect",
-                    x0=x0,
-                    x1=x1,
-                    y0=y0,
-                    y1=y1,
+                    x0=x0, x1=x1, y0=y0, y1=y1,
                     fillcolor=shelf_colors.get(shelf, "lightblue"),
                     line=dict(color="black"),
                 )
                 fig.add_trace(
                     go.Scatter(
-                        x=[(x0 + x1) / 2],
-                        y=[(y0 + y1) / 2],
-                        text=[bin_label],
-                        mode="text",
-                        hoverinfo="text",
-                        showlegend=False,
+                        x=[(x0 + x1) / 2], y=[(y0 + y1) / 2],
+                        text=[bin_label], mode="text",
+                        hoverinfo="text", showlegend=False,
                     )
                 )
 
@@ -124,14 +112,9 @@ def plot_bin_diagram(bay_id, shelves, bins_per_shelf, base_number, num_digits):
                 tickmode="array",
                 tickvals=list(range(len(shelves))) if shelves else [0],
                 ticktext=shelves if shelves else ["No Shelves"],
-                showgrid=False,
-                zeroline=False,
+                showgrid=False, zeroline=False,
             ),
-            yaxis=dict(
-                showgrid=False,
-                zeroline=False,
-                autorange="reversed",
-            ),
+            yaxis=dict(showgrid=False, zeroline=False, autorange="reversed"),
             showlegend=bool(shelves),
             legend_title_text="Shelves",
             width=200 * (len(shelves) if shelves else 1),
@@ -142,10 +125,8 @@ def plot_bin_diagram(bay_id, shelves, bins_per_shelf, base_number, num_digits):
         for shelf in shelves:
             fig.add_trace(
                 go.Scatter(
-                    x=[None],
-                    y=[None],
-                    mode="markers",
-                    name=shelf,
+                    x=[None], y=[None],
+                    mode="markers", name=shelf,
                     marker=dict(size=10, color=shelf_colors.get(shelf, "lightblue")),
                 )
             )
@@ -168,7 +149,6 @@ def style_excel(writer, sheet_name, df, shelves):
             "339900", "9B30FF", "FFFF00", "00FFFF", "CC0000", "F88017",
             "FF00FF", "996600", "00FF00", "FF6565", "9999FE"
         ]
-        
         styling_colors = ["FFFFFF"] + hex_colors
 
         if shelves:
@@ -231,10 +211,9 @@ def check_duplicate_bay_ids(bay_groups):
     for bay_id, groups in all_bay_ids.items():
         if len(groups) > 1:
             errors.append(f"⚠️ Bay ID '{bay_id}' is duplicated across groups: {', '.join(groups)}.")
-
     return errors
 
-# --- Streamlit App ---
+# --- Streamlit UI ---
 st.title("Space Launch Quick Tools")
 st.header("Bin Label Generator 🏷️", divider='rainbow')
 st.markdown("Define bay groups, shelves, and bins per shelf to generate structured bin labels. Supports both 2-digit and 3-digit numbers after shelf letter.")
@@ -306,16 +285,14 @@ if st.button("Generate Bin Labels", disabled=bool(duplicate_errors or not bay_gr
             st.download_button(label="📥 Download Excel File", data=output, file_name="bin_labels.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             st.subheader("🖼️ Interactive Bin Layout Diagrams")
             for group in bay_groups:
-                for bay_id in sorted(group['bays'], key=lambda x: (int(re.search(r'\d{3}', x).group(0)), extract_bay_number(x))):
+                for bay_id in sorted(group['bays'], key=extract_numeric_suffix):
                     shelves = group['shelves']
                     bins_per_shelf = group['bins_per_shelf']
                     try:
                         base_label = bay_id.replace("BAY-", "")
-                        match = re.search(r'([A-Z])?(\d+)$', base_label)
-                        if not match:
+                        _, base_number, num_digits = split_prefix_and_number(base_label)
+                        if base_number is None:
                             continue
-                        base_number = int(match.group(2))
-                        num_digits = len(match.group(2))
                         with st.expander(f"View Diagram for **{bay_id}**"):
                             fig = plot_bin_diagram(bay_id, shelves, bins_per_shelf, base_number, num_digits)
                             if fig:
